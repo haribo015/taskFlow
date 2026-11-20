@@ -1,0 +1,16 @@
+# Gitleaks configuration: default rules + documented allowlist.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Non-secret development defaults"
+paths = [
+  # documented placeholder values, overridden by real environment variables
+  '''\.env\.example$''',
+]
+regexes = [
+  # dev-only JWT placeholders used in config defaults and tests
+  '''dev-only-insecure-secret-change-me-in-prod''',
+  '''test-secret-with-at-least-32-bytes!!''',
+  '''change-me-please-with-a-long-random-string-0123456789''',
+]
