@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+reports/
+*.egg-info/
+db.sqlite3*
+
+# Node / Angular
+node_modules/
+dist/
+.angular/
+coverage/
+
+# Env & secrets
+.env
+*.pem
+*.key
+
+# IDE / OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
