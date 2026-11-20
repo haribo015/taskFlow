@@ -1,0 +1,31 @@
+<mat-toolbar class="toolbar">
+  <a class="brand" routerLink="/">
+    <mat-icon>task_alt</mat-icon>
+    <span>TaskFlow</span>
+  </a>
+
+  @if (auth.user(); as user) {
+    <nav class="nav">
+      <a mat-button routerLink="/workspaces" routerLinkActive="active">
+        <mat-icon>workspaces</mat-icon> Espaces
+      </a>
+      <a mat-button routerLink="/my-tasks" routerLinkActive="active">
+        <mat-icon>checklist</mat-icon> Mes tâches
+      </a>
+    </nav>
+    <span class="spacer"></span>
+    <button mat-button [matMenuTriggerFor]="userMenu">
+      <mat-icon>account_circle</mat-icon> {{ user.full_name }}
+    </button>
+    <mat-menu #userMenu="matMenu">
+      <div class="menu-email">{{ user.email }}</div>
+      <button mat-menu-item (click)="auth.logout()">
+        <mat-icon>logout</mat-icon> Se déconnecter
+      </button>
+    </mat-menu>
+  }
+</mat-toolbar>
+
+<main class="content">
+  <router-outlet />
+</main>

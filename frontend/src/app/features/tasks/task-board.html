@@ -1,0 +1,63 @@
+@if (loading()) {
+  <mat-progress-bar mode="indeterminate" />
+}
+
+<div class="board" cdkDropListGroup>
+  @for (column of columns(); track column.status) {
+    <section class="column" [attr.data-status]="column.status">
+      <header class="column-header">
+        <h3>{{ statusLabels[column.status] }}</h3>
+        <span class="count">{{ column.tasks.length }}</span>
+        <span class="spacer"></span>
+        <button
+          mat-icon-button
+          (click)="open(undefined, column.status)"
+          matTooltip="Ajouter une tâche"
+          [attr.aria-label]="'Ajouter une tâche dans ' + statusLabels[column.status]"
+        >
+          <mat-icon>add</mat-icon>
+        </button>
+      </header>
+
+      <div
+        class="drop-zone"
+        cdkDropList
+        [cdkDropListData]="column.status"
+        (cdkDropListDropped)="drop($event)"
+      >
+        @for (task of column.tasks; track task.id) {
+          <mat-card
+            class="task-card"
+            appearance="outlined"
+            cdkDrag
+            [cdkDragData]="task"
+            (click)="open(task)"
+            (keydown.enter)="open(task)"
+            tabindex="0"
+          >
+            <div class="task-title">{{ task.title }}</div>
+            @if (task.description) {
+              <p class="task-description">{{ task.description }}</p>
+            }
+            <div class="task-meta">
+              <span class="priority" [attr.data-priority]="task.priority">
+                {{ priorityLabels[task.priority] }}
+              </span>
+              @if (task.due_date) {
+                <span class="due" [class.overdue]="isOverdue(task.due_date, task.status)">
+                  <mat-icon inline>event</mat-icon> {{ task.due_date | date: 'd MMM' }}
+                </span>
+              }
+              <span class="spacer"></span>
+              @if (assigneeName(task); as name) {
+                <span class="assignee" [matTooltip]="name">{{ name.charAt(0) }}</span>
+              }
+            </div>
+          </mat-card>
+        } @empty {
+          <p class="empty-column">Glissez une tâche ici</p>
+        }
+      </div>
+    </section>
+  }
+</div>
