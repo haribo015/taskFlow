@@ -1,0 +1,117 @@
+name: taskflow
+
+# Shared configuration for the FastAPI microservices
+x-service-env: &service-env
+  JWT_SECRET: ${JWT_SECRET:-change-me-please-with-a-long-random-string-0123456789}
+  RABBITMQ_URL: amqp://${RABBITMQ_USER:-taskflow}:${RABBITMQ_PASSWORD:-taskflow}@rabbitmq:5672/
+
+x-service: &service
+  restart: unless-stopped
+  networks: [backend]
+  depends_on:
+    postgres:
+      condition: service_healthy
+    rabbitmq:
+      condition: service_healthy
+
+services:
+  # ---------- Infrastructure ----------
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-taskflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-taskflow}
+      POSTGRES_MULTIPLE_DATABASES: users_db,workspaces_db,tasks_db,analytics_db
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d analytics_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend]
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-taskflow}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-taskflow}
+    ports:
+      - "15672:15672" # management UI (dev only)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [backend]
+
+  # ---------- Microservices ----------
+  user-service:
+    <<: *service
+    build: ./services/user-service
+    image: taskflow/user-service:${TAG:-latest}
+    environment:
+      <<: *service-env
+      DATABASE_URL: postgres://${POSTGRES_USER:-taskflow}:${POSTGRES_PASSWORD:-taskflow}@postgres:5432/users_db
+
+  workspace-service:
+    <<: *service
+    build: ./services/workspace-service
+    image: taskflow/workspace-service:${TAG:-latest}
+    environment:
+      <<: *service-env
+      DATABASE_URL: postgres://${POSTGRES_USER:-taskflow}:${POSTGRES_PASSWORD:-taskflow}@postgres:5432/workspaces_db
+      USER_SERVICE_URL: http://user-service:8000
+
+  task-service:
+    <<: *service
+    build: ./services/task-service
+    image: taskflow/task-service:${TAG:-latest}
+    environment:
+      <<: *service-env
+      DATABASE_URL: postgres://${POSTGRES_USER:-taskflow}:${POSTGRES_PASSWORD:-taskflow}@postgres:5432/tasks_db
+      WORKSPACE_SERVICE_URL: http://workspace-service:8000
+
+  analytics-service:
+    <<: *service
+    build: ./services/analytics-service
+    image: taskflow/analytics-service:${TAG:-latest}
+    environment:
+      <<: *service-env
+      DATABASE_URL: postgres://${POSTGRES_USER:-taskflow}:${POSTGRES_PASSWORD:-taskflow}@postgres:5432/analytics_db
+      WORKSPACE_SERVICE_URL: http://workspace-service:8000
+
+  # ---------- Edge ----------
+  frontend:
+    build: ./frontend
+    image: taskflow/frontend:${TAG:-latest}
+    restart: unless-stopped
+    networks: [backend]
+
+  gateway:
+    build: ./gateway
+    image: taskflow/gateway:${TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    depends_on:
+      user-service:
+        condition: service_healthy
+      workspace-service:
+        condition: service_healthy
+      task-service:
+        condition: service_healthy
+      analytics-service:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    networks: [backend]
+
+networks:
+  backend:
+
+volumes:
+  postgres-data:
