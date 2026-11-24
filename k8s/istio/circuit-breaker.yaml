@@ -1,0 +1,21 @@
+# Optional demo: constrain concurrent connections to WorkspaceService.
+# Apply after the base stack is healthy; remove with kubectl delete -f.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: workspace-circuit-breaker
+  namespace: taskflow
+spec:
+  host: workspace-service.taskflow.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 1
+      http:
+        http1MaxPendingRequests: 1
+        maxRequestsPerConnection: 1
+    outlierDetection:
+      consecutive5xxErrors: 2
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 100
