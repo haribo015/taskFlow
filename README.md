@@ -19,7 +19,8 @@ Tortoise ORM pour les services, PostgreSQL et RabbitMQ pour les données et les
 5. [Intégration continue](#intégration-continue)
 6. [Développement local](#développement-local)
 7. [Structure du dépôt](#structure-du-dépôt)
-8. [Pistes d'évolution](#pistes-dévolution)
+8. [Déploiement Kubernetes et Istio](#déploiement-kubernetes-et-istio)
+9. [Pistes d'évolution](#pistes-dévolution)
 
 ---
 
@@ -347,11 +348,109 @@ taskFlow/
 
 ---
 
+## Déploiement Kubernetes et Istio
+
+Le dossier [`k8s/`](k8s/) transpose la stack Compose dans un cluster Minikube avec
+injection des proxies Istio. Il reprend les objets du
+[TP servicemesh](https://github.com/charroux/servicemesh) : `Service`, `Deployment`,
+`StatefulSet`, `ConfigMap`, `Secret`, `Gateway`, `VirtualService` et `DestinationRule`.
+Le gateway Nginx existant continue de router `/api/...` et de servir le front ;
+l'ingress Istio lui transmet toutes les requêtes. Les images sont construites dans
+le moteur Docker de Minikube et ne sont pas publiées.
+
+### Prérequis et démarrage (PowerShell)
+
+Docker Desktop, `minikube`, `kubectl`, Python 3.12 et `istioctl` doivent être installés.
+Le profil Istio `demo` est destiné au TP. Prévoir au moins 4 CPU et 7 Gio de mémoire.
+Les [instructions d'installation d'Istio](https://istio.io/latest/docs/setup/getting-started/)
+fournissent `istioctl` et les exemples nécessaires aux addons.
+
+```powershell
+minikube start --driver=docker --cpus=4 --memory=7168
+istioctl install --set profile=demo -y
+
+# Construire les six images dans le moteur Docker de Minikube.
+minikube -p minikube docker-env --shell powershell | Invoke-Expression
+docker compose build
+
+kubectl apply -f k8s/namespace.yaml
+python scripts/k8s_secrets.py
+kubectl apply -k k8s/base
+kubectl apply -f k8s/istio/gateway.yaml
+kubectl -n taskflow rollout status statefulset/postgres --timeout=300s
+kubectl -n taskflow rollout status statefulset/rabbitmq --timeout=300s
+kubectl -n taskflow rollout status deployment/user-service --timeout=300s
+kubectl -n taskflow rollout status deployment/workspace-service --timeout=300s
+kubectl -n taskflow rollout status deployment/task-service --timeout=300s
+kubectl -n taskflow rollout status deployment/analytics-service --timeout=300s
+kubectl -n taskflow rollout status deployment/frontend --timeout=300s
+kubectl -n taskflow rollout status deployment/gateway --timeout=300s
+kubectl -n taskflow get pods,svc,pvc
+```
+
+Le script crée `.k8s.env` avec des identifiants aléatoires lors du premier lancement,
+puis réutilise ce fichier. Il est ignoré par Git. Conservez-le tant que les volumes
+PostgreSQL et RabbitMQ existent : changer les identifiants ne modifie pas ceux déjà
+initialisés sur disque. Le `Secret` Kubernetes est créé dans le namespace `taskflow`.
+La base PostgreSQL est initialisée avec les quatre bases de services sur un volume
+persistant ; RabbitMQ a également son propre volume.
+
+Dans un autre terminal, accéder à l'application via l'ingress Istio :
+
+```powershell
+kubectl -n istio-system port-forward service/istio-ingressgateway 8080:80
+```
+
+Ouvrir http://localhost:8080 puis, dans un troisième terminal, vérifier le scénario :
+
+```powershell
+python scripts/taskflow.py smoke
+```
+
+Le port 8080 doit être libre (arrêter la stack Compose si elle tourne). On peut
+inspecter les proxies avec `kubectl -n taskflow get pods` : les applications ont
+deux conteneurs, tandis que PostgreSQL et RabbitMQ n'ont pas de sidecar.
+
+### Démonstration Istio
+
+Pour observer les appels REST dans Kiali, installer les addons depuis le dossier
+`samples/addons` de l'archive Istio téléchargée, puis générer du trafic avec
+l'application ou le smoke test (adapter le chemin ci-dessous) :
+
+```powershell
+kubectl apply -f C:\chemin\vers\istio\samples\addons
+istioctl dashboard kiali
+```
+
+Le circuit breaker d'exemple limite les connexions vers WorkspaceService. À activer
+pour une démonstration de charge, puis à retirer :
+
+```powershell
+kubectl apply -f k8s/istio/circuit-breaker.yaml
+kubectl delete -f k8s/istio/circuit-breaker.yaml
+```
+
+On peut vérifier la reprise d'un pod ou augmenter provisoirement une application
+avec `kubectl -n taskflow scale deployment/task-service --replicas=2`. Les services
+utilisent encore `generate_schemas=True` au démarrage : garder une réplique par
+défaut et prévoir des migrations avant une montée en charge durable. Les routes
+`/health` contrôlent la réponse HTTP du processus ; elles ne testent pas en continu
+PostgreSQL ou RabbitMQ.
+
+Pour nettoyer, supprimer d'abord les ressources Istio, puis le namespace. Cette
+suppression efface aussi les volumes du namespace et leurs données :
+
+```powershell
+kubectl delete -f k8s/istio/gateway.yaml
+kubectl delete -f k8s/namespace.yaml
+minikube stop
+```
+
 ## Pistes d'évolution
 
-- **Kubernetes** (TP suivants) : un Deployment et un Service par image, et un Ingress
-  pour remplacer le gateway Nginx. Les healthchecks deviennent des *probes*
-  `liveness` et `readiness` sur `/health`.
+- **Déploiement hors Minikube** : publier des images versionnées dans un registre,
+  remplacer `imagePullPolicy: Never` et gérer les secrets et volumes avec les services
+  du fournisseur cloud.
 - **Migrations** : remplacer `generate_schemas` par Aerich.
 - **Publication des images** sur GHCR depuis `main` uniquement (jamais depuis une PR),
   avec signature et SBOM.
