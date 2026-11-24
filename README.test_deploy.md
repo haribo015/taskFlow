@@ -11,6 +11,23 @@ export PATH="$ISTIO_HOME/bin:$PATH"
 istioctl version --remote=false
 ```
 
+### Si Docker Desktop fournit un `kubectl` trop ancien
+
+Un client `kubectl` 1.34 est hors de la plage prise en charge pour Kubernetes 1.37.
+Dans Git Bash, installer localement le client 1.37 correspondant au cluster :
+
+```bash
+mkdir -p "$HOME/tools/kubectl"
+curl -fL "https://dl.k8s.io/release/v1.37.0/bin/windows/amd64/kubectl.exe" \
+  -o "$HOME/tools/kubectl/kubectl.exe"
+export PATH="$HOME/tools/kubectl:$PATH"
+kubectl version --client
+```
+
+Le changement de `PATH` vaut pour cette fenêtre Git Bash. Le refaire dans les autres
+fenêtres si besoin. La commande `minikube kubectl -- get pods -A` permet aussi
+d'utiliser directement le client fourni par Minikube.
+
 ## Redémarrer un déploiement qui a déjà passé le smoke test
 
 Un simple `minikube stop` conserve les ressources Kubernetes et les images du
@@ -19,14 +36,28 @@ secrets à chaque démarrage.
 
 ```bash
 minikube start
-kubectl -n taskflow get pods
+minikube status
+kubectl get namespace istio-system taskflow
+kubectl -n istio-system get deployment istiod
+kubectl -n taskflow get deployment gateway
+```
+
+Attendre `APIServer: Running` avant toute commande `kubectl`. Si l'API reste
+arrêtée, relancer `minikube start` et consulter `minikube logs` en cas d'échec.
+Si une des ressources ci-dessus est introuvable, passer à la section
+**Déployer depuis un cluster neuf** avant d'installer les addons. Si tout existe,
+continuer :
+
+```bash
 kubectl -n istio-system rollout status deployment/istiod --timeout=300s
 kubectl -n taskflow rollout status deployment/gateway --timeout=300s
+kubectl -n taskflow get pods
 kubectl apply -f "$ISTIO_HOME/samples/addons"
 kubectl -n istio-system rollout status deployment/kiali --timeout=300s
 ```
 
-Si le namespace `taskflow` n'existe plus, suivre la section suivante.
+L'avertissement de version de `kubectl` est distinct de l'absence des namespaces.
+Le corriger avec les commandes de la section précédente avant de poursuivre.
 
 ## Déployer depuis un cluster neuf
 
@@ -36,7 +67,9 @@ Cette méthode fonctionne avec les runtimes `containerd` et Docker de Minikube.
 
 ```bash
 minikube start --driver=docker --cpus=4 --memory=7168
+minikube status
 istioctl install --set profile=demo -y
+kubectl -n istio-system rollout status deployment/istiod --timeout=300s
 
 docker compose build
 for image in \
@@ -140,5 +173,6 @@ kubectl delete -f k8s/namespace.yaml
 minikube stop
 ```
 
-Références : [chargement des images dans Minikube](https://minikube.sigs.k8s.io/docs/handbook/pushing/)
-et [démarrage d'Istio avec Kiali](https://istio.io/latest/docs/setup/additional-setup/getting-started-istio-apis/).
+Références : [chargement des images dans Minikube](https://minikube.sigs.k8s.io/docs/handbook/pushing/),
+[démarrage d'Istio avec Kiali](https://istio.io/latest/docs/setup/additional-setup/getting-started-istio-apis/)
+et [compatibilité de `kubectl`](https://kubernetes.io/releases/version-skew-policy/).
