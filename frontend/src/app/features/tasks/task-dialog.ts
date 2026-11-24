@@ -44,52 +44,54 @@ export type TaskDialogResult = { action: 'save'; payload: TaskPayload } | { acti
   template: `
     <h2 mat-dialog-title>{{ data.task ? 'Modifier la tâche' : 'Nouvelle tâche' }}</h2>
     <form [formGroup]="form" (ngSubmit)="save()">
-      <mat-dialog-content class="dialog-form">
-        <mat-form-field appearance="outline">
-          <mat-label>Titre</mat-label>
-          <input matInput formControlName="title" maxlength="200" cdkFocusInitial />
-        </mat-form-field>
-        <mat-form-field appearance="outline">
-          <mat-label>Description</mat-label>
-          <textarea matInput formControlName="description" rows="4"></textarea>
-        </mat-form-field>
-        <div class="row">
-          <mat-form-field appearance="outline">
-            <mat-label>Statut</mat-label>
-            <mat-select formControlName="status">
-              @for (status of statuses; track status) {
-                <mat-option [value]="status">{{ statusLabels[status] }}</mat-option>
-              }
-            </mat-select>
+      <mat-dialog-content class="task-dialog-content">
+        <div class="task-fields">
+          <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Titre</mat-label>
+            <input matInput formControlName="title" maxlength="200" cdkFocusInitial />
           </mat-form-field>
-          <mat-form-field appearance="outline">
-            <mat-label>Priorité</mat-label>
-            <mat-select formControlName="priority">
-              @for (priority of priorities; track priority) {
-                <mat-option [value]="priority">{{ priorityLabels[priority] }}</mat-option>
-              }
-            </mat-select>
+          <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Description</mat-label>
+            <textarea matInput formControlName="description" rows="3"></textarea>
           </mat-form-field>
-        </div>
-        <div class="row">
-          <mat-form-field appearance="outline">
-            <mat-label>Assignée à</mat-label>
-            <mat-select formControlName="assigneeId">
-              <mat-option [value]="null">Personne</mat-option>
-              @for (member of data.members; track member.user_id) {
-                <mat-option [value]="member.user_id">{{ member.full_name }}</mat-option>
-              }
-            </mat-select>
-          </mat-form-field>
-          <mat-form-field appearance="outline">
-            <mat-label>Échéance</mat-label>
-            <input matInput [matDatepicker]="picker" formControlName="dueDate" />
-            <mat-datepicker-toggle matIconSuffix [for]="picker" />
-            <mat-datepicker #picker />
-          </mat-form-field>
+          <div class="details-grid">
+            <mat-form-field appearance="outline">
+              <mat-label>Statut</mat-label>
+              <mat-select formControlName="status">
+                @for (status of statuses; track status) {
+                  <mat-option [value]="status">{{ statusLabels[status] }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+            <mat-form-field appearance="outline">
+              <mat-label>Priorité</mat-label>
+              <mat-select formControlName="priority">
+                @for (priority of priorities; track priority) {
+                  <mat-option [value]="priority">{{ priorityLabels[priority] }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+          </div>
+          <div class="details-grid">
+            <mat-form-field appearance="outline">
+              <mat-label>Assignée à</mat-label>
+              <mat-select formControlName="assigneeId">
+                <mat-option [value]="null">Personne</mat-option>
+                @for (member of data.members; track member.user_id) {
+                  <mat-option [value]="member.user_id">{{ member.full_name }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+            <mat-form-field appearance="outline">
+              <mat-label>Échéance</mat-label>
+              <input matInput [matDatepicker]="picker" formControlName="dueDate" />
+              <mat-datepicker-toggle matIconSuffix [for]="picker" />
+              <mat-datepicker #picker />
+            </mat-form-field>
+          </div>
         </div>
       </mat-dialog-content>
-      <mat-dialog-actions>
+      <mat-dialog-actions class="task-dialog-actions">
         @if (data.task) {
           <button mat-button type="button" class="danger" (click)="remove()">
             <mat-icon>delete</mat-icon> Supprimer
@@ -102,15 +104,39 @@ export type TaskDialogResult = { action: 'save'; payload: TaskPayload } | { acti
     </form>
   `,
   styles: `
-    .row {
-      display: flex;
-      gap: 12px;
-      > * {
-        flex: 1;
-      }
+    .task-dialog-content {
+      padding-top: 12px;
+    }
+    .task-fields {
+      display: grid;
+      gap: 8px 16px;
+    }
+    .full-width {
+      width: 100%;
+    }
+    .details-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .details-grid mat-form-field {
+      min-width: 0;
+      width: 100%;
+    }
+    .task-dialog-actions {
+      padding: 12px 24px 20px;
     }
     .spacer {
       flex: 1;
+    }
+    @media (max-width: 600px) {
+      .details-grid {
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+      .task-dialog-actions {
+        padding-inline: 16px;
+      }
     }
   `,
 })
