@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM nginxinc/nginx-unprivileged:1.29-alpine
+FROM nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
 
 LABEL org.opencontainers.image.title="taskflow-gateway" \
       org.opencontainers.image.description="TaskFlow API gateway (Nginx reverse proxy)"
