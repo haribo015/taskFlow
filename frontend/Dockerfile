@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- Dependencies (cached as long as the lockfile does not change) ----
-FROM node:24-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS deps
+FROM node:26-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -12,7 +12,7 @@ COPY . .
 RUN npx ng build --configuration production
 
 # ---- Runtime: static files served by unprivileged Nginx ----
-FROM nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6 AS runtime
+FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:b5047b9b76845eac124358373c6852377c52e4b05834a47647e955dd91cb8f1e AS runtime
 
 LABEL org.opencontainers.image.title="taskflow-frontend" \
       org.opencontainers.image.description="TaskFlow Angular single-page application"
