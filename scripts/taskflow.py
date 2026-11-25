@@ -198,7 +198,11 @@ def api(method: str, path: str, body: dict | None = None, token: str | None = No
             is_json = "json" in response.headers.get("Content-Type", "")
             return response.status, (json.loads(raw) if raw and is_json else raw.decode())
     except urllib.error.HTTPError as error:
-        return error.code, json.loads(error.read() or b"null")
+        raw = error.read()
+        try:
+            return error.code, json.loads(raw or b"null")
+        except ValueError:  # e.g. plain-text Envoy errors (fault injection, circuit breaker)
+            return error.code, raw.decode(errors="replace")
 
 
 def expect(label: str, condition: bool, detail: object = "") -> None:
