@@ -6,10 +6,16 @@ Usage: python scripts/taskflow.py <command>
   prerequisites  check required tools (python, docker)
   test           run the pytest suites of every microservice (+ frontend if possible)
   lint           run Ruff (lint + format check) on every microservice (+ frontend ESLint/Prettier)
-  verify         test then lint, stops at the first failure (exit code 1) -- same gates as CI
+  verify         policy, test then lint, stops at the first failure (exit code 1) -- same gates as CI
+  supply-chain-policy
+                 fail on a remote GitHub action not pinned to a full commit SHA, or on a
+                 FROM / third-party image without a sha256 digest
   images         build every Docker image (docker compose build)
   up / down      start / stop the full stack
   smoke          end-to-end scenario through the API gateway (stack must be running)
+  load [N] [C]   N requests (default 200), C at a time (default 20), through the gateway
+                 to WorkspaceService and TaskService; prints the HTTP status counts
+                 (traffic for Kiali, circuit breaker and fault injection demos)
 
 Python checks use the current interpreter (activate the virtualenv first).
 Frontend checks run inside a node:24 container, so no local Node.js is required.
@@ -18,6 +24,7 @@ Frontend checks run inside a node:24 container, so no local Node.js is required.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -25,6 +32,8 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -94,7 +103,68 @@ def cmd_lint() -> None:
         print("\n(!) Docker not running: frontend quality skipped")
 
 
+# ---------------------------------------------------------------- supply chain
+USES = re.compile(r"^\s*(?:-\s*)?uses:\s*['\"]?([^\s'\"#]+)")
+FROM = re.compile(r"^\s*FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+(\S+))?", re.IGNORECASE)
+IMAGE = re.compile(r"^\s*(?:-\s*)?image:\s*['\"]?([^\s'\"#]+)")
+SHA = re.compile(r"^[0-9a-f]{40}$")
+DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
+LOCAL_IMAGES = ("taskflow/",)  # built from this repository, deployed by tag
+
+
+def policy_violations() -> list[str]:
+    """Mutable references that let someone swap what CI runs or what images contain."""
+    problems: list[str] = []
+
+    def where(path: Path, number: int) -> str:
+        return f"{path.relative_to(ROOT).as_posix()}:{number}"
+
+    for path in sorted((ROOT / ".github").rglob("*.y*ml")):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            match = USES.match(line)
+            if not match or match[1].startswith("./"):
+                continue
+            ref = match[1]
+            if ref.startswith("docker://"):
+                if not DIGEST.search(ref):
+                    problems.append(f"{where(path, number)}: {ref} has no sha256 digest")
+            elif not SHA.match(ref.rpartition("@")[2]):
+                problems.append(f"{where(path, number)}: {ref} is not pinned to a full commit SHA")
+
+    dockerfiles = [p for p in ROOT.rglob("Dockerfile*") if "node_modules" not in p.parts]
+    for path in sorted(dockerfiles):
+        stages: set[str] = set()
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            match = FROM.match(line)
+            if not match:
+                continue
+            image, stage = match[1], match[2]
+            if image.lower() not in stages and image != "scratch" and not DIGEST.search(image):
+                problems.append(f"{where(path, number)}: FROM {image} has no sha256 digest")
+            if stage:
+                stages.add(stage.lower())
+
+    manifests = [ROOT / "docker-compose.yml", *sorted((ROOT / "k8s").rglob("*.yaml"))]
+    for path in manifests:
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            match = IMAGE.match(line)
+            if match and not match[1].startswith(LOCAL_IMAGES) and not DIGEST.search(match[1]):
+                problems.append(f"{where(path, number)}: image {match[1]} has no sha256 digest")
+    return problems
+
+
+def cmd_supply_chain_policy() -> None:
+    print("\n==> Supply chain policy (pinned actions and image digests)")
+    problems = policy_violations()
+    for problem in problems:
+        print(f"  [KO] {problem}")
+    if problems:
+        raise CheckFailed(f"supply-chain-policy: {len(problems)} mutable reference(s)")
+    print("  [OK] every remote action is pinned to a commit SHA, every image to a digest")
+
+
 def cmd_verify() -> None:
+    cmd_supply_chain_policy()
     cmd_test()
     cmd_lint()
     print("\nAll quality gates passed.")
@@ -193,6 +263,46 @@ def cmd_smoke() -> None:
     print("\nSmoke test passed.")
 
 
+# ---------------------------------------------------------------- load test
+def status_of(method: str, path: str, token: str) -> int:
+    """HTTP status only; Envoy error bodies (circuit breaker, faults) are plain text."""
+    request = urllib.request.Request(GATEWAY + path, method=method, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            response.read()
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+    except (urllib.error.URLError, TimeoutError):
+        return 0
+
+
+def cmd_load(total: int = 200, concurrency: int = 20) -> None:
+    suffix = uuid.uuid4().hex[:8]
+    email = f"load-{suffix}@example.com"
+    print(f"Load test against {GATEWAY}: {total} requests, {concurrency} concurrent")
+    status, _ = api("POST", "/api/auth/register", {"email": email, "full_name": "Load", "password": "secret123"})
+    expect("UserService registers the load user", status == 201, status)
+    _, login = api("POST", "/api/auth/login", {"email": email, "password": "secret123"})
+    token = login["access_token"]
+    status, workspace = api("POST", "/api/workspaces", {"name": f"Load {suffix}", "description": ""}, token)
+    expect("WorkspaceService creates the load workspace", status == 201, workspace)
+    wid = workspace["id"]
+
+    # Even requests hit WorkspaceService; odd ones go TaskService -> WorkspaceService.
+    paths = [f"/api/workspaces/{wid}" if i % 2 == 0 else f"/api/tasks?workspace_id={wid}" for i in range(total)]
+    started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        codes = Counter(pool.map(lambda path: status_of("GET", path, token), paths))
+    elapsed = time.monotonic() - started
+
+    print(f"\n{total} requests in {elapsed:.1f}s")
+    for code, count in sorted(codes.items()):
+        label = "no response" if code == 0 else str(code)
+        print(f"  {label:>11}: {count}")
+    api("DELETE", f"/api/workspaces/{wid}", token=token)
+
+
 COMMANDS = {
     "prerequisites": cmd_prerequisites,
     "test": cmd_test,
@@ -202,15 +312,18 @@ COMMANDS = {
     "up": cmd_up,
     "down": cmd_down,
     "smoke": cmd_smoke,
+    "load": cmd_load,
+    "supply-chain-policy": cmd_supply_chain_policy,
 }
 
 
 def main() -> int:
-    if len(sys.argv) != 2 or sys.argv[1] not in COMMANDS:
+    command, args = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ("", [])
+    if command not in COMMANDS or (args and command != "load") or len(args) > 2 or not all(a.isdigit() for a in args):
         print(__doc__)
         return 2
     try:
-        COMMANDS[sys.argv[1]]()
+        COMMANDS[command](*(int(a) for a in args))
     except CheckFailed as failure:
         print(f"\nFAILED: {failure}", file=sys.stderr)
         return 1
