@@ -1,0 +1,25 @@
+# Pinned SHAs and digests do not move on their own: Dependabot proposes the
+# updates as ordinary pull requests, which go through the same CI checks.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directories:
+      - /services/user-service
+      - /services/workspace-service
+      - /services/task-service
+      - /services/analytics-service
+      - /frontend
+      - /gateway
+    schedule:
+      interval: weekly
+    groups:
+      base-images:
+        patterns: ["*"]
