@@ -1,0 +1,13 @@
+# Mutual TLS between every sidecar of the taskflow namespace (charroux/servicemesh
+# "enforce-mtls" step, with the current PeerAuthentication API).
+# PostgreSQL and RabbitMQ have no sidecar: Istio sends them plain TCP automatically.
+# Check in Kiali (Graph > Display > Security: padlocks on the edges), then remove with
+# kubectl delete -f k8s/istio/mtls.yaml
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: taskflow
+spec:
+  mtls:
+    mode: STRICT

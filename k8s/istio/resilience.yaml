@@ -1,0 +1,22 @@
+# Timeouts and retries on the internal REST calls to WorkspaceService
+# (from the gateway, TaskService and AnalyticsService).
+# Only idempotent-safe failures are retried: the request never reached the service.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: workspace-service
+  namespace: taskflow
+spec:
+  hosts:
+    - workspace-service
+  http:
+    - timeout: 5s
+      retries:
+        attempts: 3
+        perTryTimeout: 2s
+        retryOn: connect-failure,refused-stream,reset,unavailable
+      route:
+        - destination:
+            host: workspace-service
+            port:
+              number: 8000

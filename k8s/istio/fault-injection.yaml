@@ -1,0 +1,27 @@
+# Optional demo: AnalyticsService answers 503 to half of the requests and adds a 2 s
+# delay to a quarter of them. Open the Statistics tab of the app (or run
+# "python scripts/taskflow.py smoke"), then look at the red edges in Kiali.
+# Remove with kubectl delete -f k8s/istio/fault-injection.yaml
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: analytics-service-faults
+  namespace: taskflow
+spec:
+  hosts:
+    - analytics-service
+  http:
+    - fault:
+        abort:
+          percentage:
+            value: 50
+          httpStatus: 503
+        delay:
+          percentage:
+            value: 25
+          fixedDelay: 2s
+      route:
+        - destination:
+            host: analytics-service
+            port:
+              number: 8000
