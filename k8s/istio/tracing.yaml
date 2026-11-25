@@ -1,0 +1,13 @@
+# Send the Envoy spans of the whole mesh to Jaeger (the "jaeger" provider is declared
+# by the Istio demo profile, but no tracing is enabled until a Telemetry resource asks
+# for it). 100 % sampling is meant for the demo only.
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: mesh-default
+  namespace: istio-system
+spec:
+  tracing:
+    - providers:
+        - name: jaeger
+      randomSamplingPercentage: 100

@@ -91,12 +91,14 @@ addons() {
   for addon in "${ADDONS[@]}"; do
     kubectl -n istio-system rollout status "deployment/$addon" --timeout=300s
   done
+  kubectl apply -f k8s/istio/tracing.yaml # send the mesh spans to Jaeger
 }
 
 status() {
   kubectl -n "$NS" get pods,svc,pvc
   echo
   kubectl -n "$NS" get gateways.networking.istio.io,virtualservices,destinationrules,peerauthentications 2>/dev/null
+  kubectl get telemetries.telemetry.istio.io -A 2>/dev/null
   echo
   kubectl -n istio-system get pods
 }
@@ -124,7 +126,7 @@ case "${1:-}" in
   images) require; build_images
           for app in "${APPS[@]}"; do kubectl -n "$NS" rollout restart "deployment/$app"; done
           for app in "${APPS[@]}"; do kubectl -n "$NS" rollout status "deployment/$app" --timeout=300s; done ;;
-  down) for f in fault-injection circuit-breaker mtls resilience gateway; do
+  down) for f in fault-injection circuit-breaker mtls resilience gateway tracing; do
           kubectl delete -f "k8s/istio/$f.yaml" --ignore-not-found
         done
         kubectl delete -f k8s/namespace.yaml --ignore-not-found
