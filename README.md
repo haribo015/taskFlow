@@ -5,8 +5,10 @@ Elle est construite en **microservices** : Angular 22 pour le front, FastAPI, Py
 Tortoise ORM pour les services, PostgreSQL et RabbitMQ pour les données et les
 événements, Docker pour le déploiement.
 
-> Projet du cours *Intégration Cloud* (EFREI, S9). La partie DevOps s'inspire du
-> [TP 01 « une CI observable et bloquante »](https://github.com/charroux/rental/blob/main/course/labs/tp01.qmd).
+> Projet du cours *Intégration Cloud* (EFREI, S9). La partie DevOps s'inspire des TP
+> [01 « une CI observable et bloquante »](https://github.com/charroux/rental/blob/main/course/labs/tp01.qmd)
+> et [02 « produire et vérifier les preuves d'une image »](https://github.com/charroux/rental/blob/main/course/labs/tp02.qmd),
+> le déploiement Kubernetes et Istio du TP [servicemesh](https://github.com/charroux/servicemesh).
 
 ---
 
@@ -17,10 +19,11 @@ Tortoise ORM pour les services, PostgreSQL et RabbitMQ pour les données et les
 3. [Démarrage rapide](#démarrage-rapide)
 4. [Images Docker](#images-docker)
 5. [Intégration continue](#intégration-continue)
-6. [Développement local](#développement-local)
-7. [Structure du dépôt](#structure-du-dépôt)
-8. [Déploiement Kubernetes et Istio](#déploiement-kubernetes-et-istio)
-9. [Pistes d'évolution](#pistes-dévolution)
+6. [Chaîne d'approvisionnement logicielle](#chaîne-dapprovisionnement-logicielle)
+7. [Développement local](#développement-local)
+8. [Structure du dépôt](#structure-du-dépôt)
+9. [Déploiement Kubernetes et Istio](#déploiement-kubernetes-et-istio)
+10. [Pistes d'évolution](#pistes-dévolution)
 
 ---
 
@@ -237,6 +240,8 @@ Le projet produit **6 images**, toutes construites par `docker compose build` et
 
 Bonnes pratiques appliquées :
 
+- **Images de base immuables** : chaque `FROM` garde son tag lisible et ajoute un digest
+  `@sha256:…`. Dependabot propose les mises à jour par pull request.
 - **Builds multi-stage** : les outils de build ne se retrouvent pas dans l'image finale.
 - **Exécution non-root** : utilisateur `app` pour les images Python, images Nginx *unprivileged* écoutant sur le port 8080.
 - **Cache de couches** : les dépendances (`requirements.txt`, `package-lock.json`) sont copiées avant le code source.
@@ -249,8 +254,10 @@ Bonnes pratiques appliquées :
 
 ## Intégration continue
 
-Quatre workflows GitHub Actions, dans [`.github/workflows`](.github/workflows), appliquent
-les principes du TP 01. Les images sont **construites mais jamais publiées**.
+Six workflows GitHub Actions, dans [`.github/workflows`](.github/workflows), appliquent
+les principes des TP 01 et 02. Sur une pull request, les images sont **construites mais
+jamais publiées**. Seul le workflow `Supply chain`, sur `main`, publie dans GHCR (voir la
+[section suivante](#chaîne-dapprovisionnement-logicielle)).
 
 ```mermaid
 flowchart LR
@@ -263,10 +270,14 @@ flowchart LR
         q2[Frontend quality<br/>ESLint, Prettier, build] --> i2
     end
     subgraph integration.yml
+        p[Supply chain policy<br/>SHA et digests]
         c[docker compose build + up<br/>smoke test de bout en bout]
     end
     subgraph secrets.yml
         g[Gitleaks<br/>historique complet]
+    end
+    subgraph dependency-review.yml[dependency-review.yml, PR uniquement]
+        d[Dependency review<br/>seuil high]
     end
 ```
 
@@ -276,7 +287,7 @@ flowchart LR
 | Graphe de dépendances | Le job `image` dépend (`needs`) de `tests` et de `quality` |
 | Rapports exploitables même en cas d'échec | JUnit (pytest, Vitest, Ruff), couverture et scan Trivy publiés avec `upload-artifact`, `if: always()` et `retention-days: 7` |
 | Annotations | `ruff check --output-format=github` |
-| Sécurité de la CI | `permissions: contents: read`, actions tierces épinglées par **SHA**, aucune publication d'image |
+| Sécurité de la CI | `permissions: contents: read` par défaut, **toutes** les actions épinglées par SHA complet, aucune publication d'image depuis une PR |
 | Coût maîtrisé | `timeout-minutes` sur chaque job, cache pip, npm et Docker (`type=gha`), `concurrency` avec `cancel-in-progress` |
 | Détection de secrets | Gitleaks sur l'historique complet (`fetch-depth: 0`), avec une allowlist documentée dans [`.gitleaks.toml`](.gitleaks.toml) |
 | Reproduction en local | `python scripts/taskflow.py verify` |
@@ -288,8 +299,87 @@ obligatoires de s'exécuter sur certaines PR, qui resteraient alors bloquées en
 
 - `Python tests (*)`, `Python quality (*)` et `Docker image (*)`
 - `Frontend tests`, `Frontend quality` et `Frontend Docker image`
-- `Docker Compose stack`
+- `Docker Compose stack` et `Supply chain policy`
 - `Secret detection`
+- `Dependency review`
+
+---
+
+## Chaîne d'approvisionnement logicielle
+
+Ce volet applique le TP 02. Un tag comme `latest` ne dit ni ce qui sera déployé, ni qui
+l'a produit. Chaque image publiée est donc identifiée par son **digest** et accompagnée
+de preuves vérifiables.
+
+### Références immuables
+
+| Élément | Contrôle |
+|---|---|
+| Actions GitHub | Épinglées par SHA de commit complet, version lisible en commentaire : `actions/checkout@3d3c42e… # v7.0.1` |
+| Images de base | Tag et digest : `FROM python:3.12-slim@sha256:…` (Dockerfiles, Compose, manifestes Kubernetes) |
+| Mises à jour | [Dependabot](.github/dependabot.yml) ouvre des PR hebdomadaires pour les écosystèmes `github-actions` et `docker` |
+| Politique | `python scripts/taskflow.py supply-chain-policy` échoue sur une action sans SHA ou une image sans digest. Il s'exécute dans `verify` et sur chaque PR |
+
+### Modélisation des risques
+
+| Élément | Scénario de substitution | Impact | Contrôle qui réduit le risque |
+|---|---|---|---|
+| Action GitHub | Le tag majeur `v7` est déplacé vers un commit malveillant | Code arbitraire dans la CI, avec ses jetons | Épinglage par SHA, politique locale et sur PR, Dependabot pour les mises à jour volontaires |
+| Image de base | Le manifeste derrière `python:3.12-slim` est remplacé | Contenu inconnu dans toutes les images | Digest dans chaque `FROM`, Trivy sur l'image finale |
+| Dépendance applicative | Une PR ajoute une bibliothèque vulnérable | Vulnérabilité livrée en production | Revue des dépendances (seuil `high`), versions figées dans `requirements.txt` et `package-lock.json` |
+| Image produite | `latest` est déplacé après le scan, ou une image est poussée hors CI | On déploie autre chose que ce qui a été testé | Tout se fait sur `image@digest` : signature Cosign, attestations, vérification, puis Trivy |
+| Identité du producteur | Une image est signée avec une clé volée | Fausse confiance dans l'origine | Signature sans clé : l'identité est celle du workflow sur `main`, certifiée par l'OIDC de GitHub |
+
+### Revue des dépendances ou Trivy ?
+
+Les deux contrôles sont complémentaires. La **revue des dépendances**
+([dependency-review.yml](.github/workflows/dependency-review.yml)) compare les manifestes
+et lock files **avant le merge**. Elle bloque une PR qui *introduit* une dépendance
+vulnérable, avant qu'elle n'entre dans `main`. **Trivy** analyse le **contenu final de
+l'image** : paquets du système de base, bibliothèques effectivement installées, y compris
+les vulnérabilités publiées après le merge. Le premier contrôle porte sur le changement
+proposé, le second sur l'artefact livré.
+
+### Pipeline de publication
+
+[supply-chain.yml](.github/workflows/supply-chain.yml) s'exécute uniquement sur `main`,
+pour les six images. Chaque job reçoit seulement les permissions dont il a besoin.
+
+```mermaid
+flowchart LR
+    pol[Supply chain policy] --> pub
+    subgraph pub[publish · packages: write]
+        b[Buildx push<br/>ghcr.io/…:sha] --> dg[digest]
+        dg --> sb[SBOM Syft<br/>SPDX JSON]
+    end
+    subgraph sign[sign · id-token, attestations, packages: write]
+        cs[cosign sign<br/>sans clé] --> pv[attestation<br/>provenance SLSA]
+        pv --> as[attestation SBOM]
+    end
+    subgraph verify[verify · lecture seule]
+        cv[cosign verify] --> gv[gh attestation verify<br/>provenance + SBOM]
+        gv --> tv[Trivy sur image@digest]
+    end
+    pub --> sign --> verify
+```
+
+Le SBOM, le digest, la sortie de `cosign verify`, la provenance et le rapport Trivy sont
+conservés 7 jours comme artefacts de l'exécution (`evidence-*`, `verification-*`).
+
+Vérifier une image publiée depuis un poste (avec [Cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
+et la CLI `gh`) :
+
+```bash
+IMAGE=ghcr.io/haribo015/taskflow/task-service@sha256:<digest>
+cosign verify "$IMAGE" \
+  --certificate-identity "https://github.com/haribo015/taskFlow/.github/workflows/supply-chain.yml@refs/heads/main" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+gh attestation verify "oci://$IMAGE" --repo haribo015/taskFlow
+gh attestation verify "oci://$IMAGE" --repo haribo015/taskFlow --predicate-type https://spdx.dev/Document/v2.3
+```
+
+À activer une fois dans *Settings > Security* du dépôt : le **graphe de dépendances** et
+les **alertes Dependabot**.
 
 ---
 
@@ -300,11 +390,13 @@ python -m venv .venv
 .venv\Scripts\activate                  # Windows (source .venv/bin/activate sous Linux/macOS)
 pip install -r services/task-service/requirements-dev.txt   # mêmes versions pour tous les services
 
-python scripts/taskflow.py verify       # tests puis qualité ; s'arrête au premier échec (code 1)
+python scripts/taskflow.py verify       # politique, tests puis qualité ; s'arrête au premier échec (code 1)
+python scripts/taskflow.py supply-chain-policy   # actions épinglées par SHA, images par digest
 python scripts/taskflow.py test         # pytest pour les 4 services, puis Vitest
 python scripts/taskflow.py lint         # Ruff, puis ESLint et Prettier
 python scripts/taskflow.py images       # construit les 6 images
 python scripts/taskflow.py up | down | smoke
+python scripts/taskflow.py load 300 20  # charge concurrente, affiche les codes HTTP reçus
 ```
 
 - Les tests Python utilisent **SQLite en mémoire**. Les appels REST et RabbitMQ sont
@@ -340,8 +432,16 @@ taskFlow/
 ├── frontend/                  # Angular 22 + Material, Dockerfile, nginx.conf
 ├── gateway/                   # Nginx API gateway, Dockerfile
 ├── infra/postgres/            # script de création des bases
-├── scripts/taskflow.py        # verify / images / up / down / smoke
-├── .github/workflows/         # services, frontend, integration, secrets
+├── k8s/
+│   ├── base/                  # Kustomize : ConfigMap, PostgreSQL, RabbitMQ, services, front, gateway
+│   └── istio/                 # Gateway, mTLS, résilience, fautes, circuit breaker, traçage
+├── scripts/
+│   ├── taskflow.py            # verify / supply-chain-policy / images / up / down / smoke / load
+│   ├── k8s.sh                 # déploiement Minikube + Istio + addons, port-forwards
+│   └── k8s_secrets.py         # Secret Kubernetes généré localement
+├── .github/
+│   ├── workflows/             # services, frontend, integration, secrets, dependency-review, supply-chain
+│   └── dependabot.yml
 ├── docker-compose.yml
 └── .env.example
 ```
@@ -350,110 +450,67 @@ taskFlow/
 
 ## Déploiement Kubernetes et Istio
 
-Le dossier [`k8s/`](k8s/) transpose la stack Compose dans un cluster Minikube avec
-injection des proxies Istio. Il reprend les objets du
-[TP servicemesh](https://github.com/charroux/servicemesh) : `Service`, `Deployment`,
-`StatefulSet`, `ConfigMap`, `Secret`, `Gateway`, `VirtualService` et `DestinationRule`.
-Le gateway Nginx existant continue de router `/api/...` et de servir le front ;
-l'ingress Istio lui transmet toutes les requêtes. Les images sont construites dans
-le moteur Docker de Minikube et ne sont pas publiées.
+Le dossier [`k8s/`](k8s/) transpose la stack Compose dans un cluster **Minikube**, avec le
+service mesh **Istio** et ses outils d'observation, en suivant le TP
+[servicemesh](https://github.com/charroux/servicemesh). Le guide complet, avec les
+prérequis, chaque commande, les démonstrations et le dépannage, est dans
+**[README.test_deploy.md](README.test_deploy.md)**.
 
-### Prérequis et démarrage (PowerShell)
-
-Docker Desktop, `minikube`, `kubectl`, Python 3.12 et `istioctl` doivent être installés.
-Le profil Istio `demo` est destiné au TP. Prévoir au moins 4 CPU et 7 Gio de mémoire.
-Les [instructions d'installation d'Istio](https://istio.io/latest/docs/setup/getting-started/)
-fournissent `istioctl` et les exemples nécessaires aux addons.
-
-```powershell
-minikube start --driver=docker --cpus=4 --memory=7168
-istioctl install --set profile=demo -y
-
-# Construire les six images dans le moteur Docker de Minikube.
-minikube -p minikube docker-env --shell powershell | Invoke-Expression
-docker compose build
-
-kubectl apply -f k8s/namespace.yaml
-python scripts/k8s_secrets.py
-kubectl apply -k k8s/base
-kubectl apply -f k8s/istio/gateway.yaml
-kubectl -n taskflow rollout status statefulset/postgres --timeout=300s
-kubectl -n taskflow rollout status statefulset/rabbitmq --timeout=300s
-kubectl -n taskflow rollout status deployment/user-service --timeout=300s
-kubectl -n taskflow rollout status deployment/workspace-service --timeout=300s
-kubectl -n taskflow rollout status deployment/task-service --timeout=300s
-kubectl -n taskflow rollout status deployment/analytics-service --timeout=300s
-kubectl -n taskflow rollout status deployment/frontend --timeout=300s
-kubectl -n taskflow rollout status deployment/gateway --timeout=300s
-kubectl -n taskflow get pods,svc,pvc
-```
-
-Le script crée `.k8s.env` avec des identifiants aléatoires lors du premier lancement,
-puis réutilise ce fichier. Il est ignoré par Git. Conservez-le tant que les volumes
-PostgreSQL et RabbitMQ existent : changer les identifiants ne modifie pas ceux déjà
-initialisés sur disque. Le `Secret` Kubernetes est créé dans le namespace `taskflow`.
-La base PostgreSQL est initialisée avec les quatre bases de services sur un volume
-persistant ; RabbitMQ a également son propre volume.
-
-Dans un autre terminal, accéder à l'application via l'ingress Istio :
-
-```powershell
-kubectl -n istio-system port-forward service/istio-ingressgateway 8080:80
-```
-
-Ouvrir http://localhost:8080 puis, dans un troisième terminal, vérifier le scénario :
-
-```powershell
+```bash
+bash scripts/k8s.sh up          # cluster, Istio, images, TaskFlow, Kiali/Prometheus/Grafana/Jaeger
+bash scripts/k8s.sh forward     # http://localhost:8080 via l'ingress Istio
+bash scripts/k8s.sh kiali       # http://localhost:20001 (dans une autre fenêtre)
 python scripts/taskflow.py smoke
 ```
 
-Le port 8080 doit être libre (arrêter la stack Compose si elle tourne). On peut
-inspecter les proxies avec `kubectl -n taskflow get pods` : les applications ont
-deux conteneurs, tandis que PostgreSQL et RabbitMQ n'ont pas de sidecar.
-
-### Démonstration Istio
-
-Pour observer les appels REST dans Kiali, installer les addons depuis le dossier
-`samples/addons` de l'archive Istio téléchargée, puis générer du trafic avec
-l'application ou le smoke test (adapter le chemin ci-dessous) :
-
-```powershell
-kubectl apply -f C:\chemin\vers\istio\samples\addons
-istioctl dashboard kiali
+```mermaid
+flowchart LR
+    user([Navigateur]) --> ig[istio-ingressgateway]
+    subgraph ns[namespace taskflow · sidecars Envoy]
+        ig --> gw[gateway Nginx]
+        gw --> fe[frontend]
+        gw --> us[user-service]
+        gw --> ws[workspace-service]
+        gw --> ts[task-service]
+        gw --> as[analytics-service]
+        ws --> us
+        ts --> ws
+        as --> ws
+    end
+    subgraph infra[sans sidecar]
+        pg[(PostgreSQL<br/>StatefulSet + PVC)]
+        mq{{RabbitMQ<br/>StatefulSet + PVC}}
+    end
+    us & ws & ts & as --> pg
+    ws & ts & as --> mq
 ```
 
-Le circuit breaker d'exemple limite les connexions vers WorkspaceService. À activer
-pour une démonstration de charge, puis à retirer :
+| Objet | Rôle |
+|---|---|
+| `Namespace` avec `istio-injection: enabled` | Un proxy Envoy est injecté dans chaque pod applicatif |
+| `Deployment`, `Service`, sondes `startup`/`readiness`/`liveness` | Six applications, images chargées dans Minikube (`imagePullPolicy: Never`) |
+| `StatefulSet` et volumes persistants | PostgreSQL et RabbitMQ, sans sidecar |
+| `ConfigMap`, `Secret` | Configuration, et identifiants générés par `scripts/k8s_secrets.py` (jamais commités) |
+| `Gateway`, `VirtualService` | Entrée Istio vers le gateway Nginx |
+| [`resilience.yaml`](k8s/istio/resilience.yaml) | Timeout et retries vers WorkspaceService |
+| [`mtls.yaml`](k8s/istio/mtls.yaml) | `PeerAuthentication` en mTLS strict |
+| [`fault-injection.yaml`](k8s/istio/fault-injection.yaml) | Démo : erreurs 503 et délais sur AnalyticsService |
+| [`circuit-breaker.yaml`](k8s/istio/circuit-breaker.yaml) | Démo : `DestinationRule` avec limite de connexions et éjection |
+| [`tracing.yaml`](k8s/istio/tracing.yaml) | `Telemetry` : envoi des traces vers Jaeger |
 
-```powershell
-kubectl apply -f k8s/istio/circuit-breaker.yaml
-kubectl delete -f k8s/istio/circuit-breaker.yaml
-```
-
-On peut vérifier la reprise d'un pod ou augmenter provisoirement une application
-avec `kubectl -n taskflow scale deployment/task-service --replicas=2`. Les services
-utilisent encore `generate_schemas=True` au démarrage : garder une réplique par
-défaut et prévoir des migrations avant une montée en charge durable. Les routes
-`/health` contrôlent la réponse HTTP du processus ; elles ne testent pas en continu
-PostgreSQL ou RabbitMQ.
-
-Pour nettoyer, supprimer d'abord les ressources Istio, puis le namespace. Cette
-suppression efface aussi les volumes du namespace et leurs données :
-
-```powershell
-kubectl delete -f k8s/istio/gateway.yaml
-kubectl delete -f k8s/namespace.yaml
-minikube stop
-```
+Le gateway Nginx transmet le nom du service cible dans l'en-tête `Host`. Les sidecars
+routent ainsi chaque appel vers le bon `Service` Kubernetes : Kiali affiche les vrais arcs
+entre services, et le mTLS s'applique aussi à ces appels.
 
 ## Pistes d'évolution
 
-- **Déploiement hors Minikube** : publier des images versionnées dans un registre,
+- **Déploiement hors Minikube** : déployer les images signées de GHCR par digest,
   remplacer `imagePullPolicy: Never` et gérer les secrets et volumes avec les services
   du fournisseur cloud.
+- **Admission Kubernetes** : refuser toute image non signée par le workflow (Sigstore
+  policy-controller ou Kyverno).
+- **Verrouillage par hash** des dépendances Python (`pip install --require-hashes`).
 - **Migrations** : remplacer `generate_schemas` par Aerich.
-- **Publication des images** sur GHCR depuis `main` uniquement (jamais depuis une PR),
-  avec signature et SBOM.
 - **Bibliothèque partagée** : `security.py` et `messaging.py` sont copiés à l'identique
   dans chaque service pour garder les images indépendantes. On pourrait en faire un
   paquet interne.
